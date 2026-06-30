@@ -6,6 +6,11 @@ Atlassian-SDK-README.txt
 js
 css
 target
+target-stale-*
+systemtest/artifacts/
+systemtest/specs/target/
+__pycache__/
+*.py[cod]
 build
 .settings
 .project

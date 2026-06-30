@@ -30,6 +30,7 @@
         <java.version>21</java.version>
         <maven.compiler.source>${java.version}</maven.compiler.source>
         <maven.compiler.target>${java.version}</maven.compiler.target>
+        <amps.quick.reload>true</amps.quick.reload>
     </properties>
 
     <dependencies>
@@ -132,7 +133,7 @@
                 <configuration>
                     <productVersion>${bamboo.version}</productVersion>
                     <productDataVersion>${bamboo.data.version}</productDataVersion>
-                    <enableQuickReload>true</enableQuickReload>
+                    <enableQuickReload>${amps.quick.reload}</enableQuickReload>
 
                     <banningExcludes>
                         <exclude>commons-io:commons-io</exclude>

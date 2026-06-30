@@ -1,0 +1,49 @@
+name: system-tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  bamboo-system-tests:
+    runs-on: windows-latest
+    timeout-minutes: 90
+
+    env:
+      BAMBOO_URL: http://localhost:6990/bamboo
+      BAMBOO_USERNAME: admin
+      BAMBOO_PASSWORD: admin
+      CI_TEARDOWN_BAMBOO: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: 21
+          cache: maven
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r systemtest/requirements.txt
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2026a
+
+      - name: Run Bamboo system tests
+        run: python -u systemtest\run_system_tests.py
+
+      - name: Upload system-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bamboo-systemtest-artifacts
+          path: systemtest/artifacts/**
+          if-no-files-found: ignore
