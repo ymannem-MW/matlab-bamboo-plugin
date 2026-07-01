@@ -222,7 +222,35 @@ def cmd_quote(value: Path | str) -> str:
     return '"' + str(value).replace('"', '""') + '"'
 
 
+def should_teardown_bamboo() -> bool:
+    return os.environ.get("CI_TEARDOWN_BAMBOO", "").lower() in ("1", "true", "yes")
+
+
 def launch_bamboo(command: list[str]) -> tuple[subprocess.Popen, object | None]:
+    if sys.platform.startswith("win") and should_teardown_bamboo():
+        LOG_FILE.write_text("", encoding="utf-8", errors="replace")
+        LAUNCHER_FILE.write_text(
+            "\r\n".join(
+                [
+                    "@echo off",
+                    f"cd /d {cmd_quote(ROOT)}",
+                    f"call {subprocess.list2cmdline(command)} > {cmd_quote(LOG_FILE)} 2>&1",
+                    "",
+                ]
+            ),
+            encoding="utf-8",
+            errors="replace",
+        )
+        process = subprocess.Popen(
+            ["cmd.exe", "/d", "/c", str(LAUNCHER_FILE)],
+            cwd=ROOT,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=subprocess.CREATE_NEW_PROCESS_GROUP,
+        )
+        return process, None
+
     if sys.platform.startswith("win"):
         LOG_FILE.write_text("", encoding="utf-8", errors="replace")
         LAUNCHER_FILE.write_text(
@@ -263,6 +291,27 @@ def launch_bamboo(command: list[str]) -> tuple[subprocess.Popen, object | None]:
     return process, log_file
 
 
+def stop_launched_bamboo(process: subprocess.Popen) -> None:
+    if process.stdin:
+        try:
+            process.stdin.close()
+        except OSError:
+            pass
+        try:
+            process.wait(timeout=60)
+            return
+        except subprocess.TimeoutExpired:
+            print("  Bamboo process did not exit after stdin close; stopping process tree.")
+
+    stop_process_tree(process.pid)
+    try:
+        process.wait(timeout=60)
+    except subprocess.TimeoutExpired:
+        print("  Bamboo process did not exit after taskkill; forcing one more termination.")
+        process.kill()
+        process.wait(timeout=30)
+
+
 def stream_bamboo_progress(stop_event: threading.Event, process: subprocess.Popen) -> None:
     position = 0
     started = time.time()
@@ -300,7 +349,7 @@ def main() -> int:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     command = start_bamboo.get_command()
     started = time.time()
-    teardown_at_end = os.environ.get("CI_TEARDOWN_BAMBOO", "").lower() in ("1", "true", "yes")
+    teardown_at_end = should_teardown_bamboo()
 
     print_phase("PHASE 0: Teardown Existing Bamboo")
     teardown_existing_bamboo()
@@ -355,7 +404,7 @@ def main() -> int:
             if process.poll() is None:
                 if teardown_at_end:
                     print("CI teardown requested; stopping Bamboo before exit.")
-                    stop_process_tree(process.pid)
+                    stop_launched_bamboo(process)
                     PID_FILE.unlink(missing_ok=True)
                 else:
                     print(f"Bamboo is still running at: {probe_bamboo.BAMBOO_URL}")
