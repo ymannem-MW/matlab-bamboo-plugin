@@ -52,7 +52,7 @@ def save_response(name: str, response: requests.Response) -> None:
 
 
 def wait_for_http() -> requests.Response:
-    print(f"Waiting for Bamboo HTTP at {BAMBOO_URL}...")
+    print(f"Waiting up to {SERVER_TIMEOUT}s for Bamboo HTTP at {BAMBOO_URL}...")
     deadline = time.time() + SERVER_TIMEOUT
     start = time.time()
     last_progress = start

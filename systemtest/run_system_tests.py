@@ -31,6 +31,8 @@ LAUNCHER_FILE = ARTIFACTS / "start-bamboo.cmd"
 
 LOG_MILESTONES = (
     re.compile(r"--- .* @ matlab-bamboo-plugin ---"),
+    re.compile(r"Downloading from "),
+    re.compile(r"Downloaded from "),
     re.compile(r"Building jar:"),
     re.compile(r"Starting bamboo"),
     re.compile(r"Deploying web application archive"),
@@ -226,6 +228,11 @@ def should_teardown_bamboo() -> bool:
     return os.environ.get("CI_TEARDOWN_BAMBOO", "").lower() in ("1", "true", "yes")
 
 
+def configure_ci_timeouts() -> None:
+    if should_teardown_bamboo() and "BAMBOO_SERVER_TIMEOUT" not in os.environ:
+        probe_bamboo.SERVER_TIMEOUT = 2400
+
+
 def launch_bamboo(command: list[str]) -> tuple[subprocess.Popen, object | None]:
     if sys.platform.startswith("win") and should_teardown_bamboo():
         LOG_FILE.write_text("", encoding="utf-8", errors="replace")
@@ -350,6 +357,7 @@ def main() -> int:
     command = start_bamboo.get_command()
     started = time.time()
     teardown_at_end = should_teardown_bamboo()
+    configure_ci_timeouts()
 
     print_phase("PHASE 0: Teardown Existing Bamboo")
     teardown_existing_bamboo()
