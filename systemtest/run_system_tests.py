@@ -289,7 +289,9 @@ def launch_bamboo(command: list[str]) -> tuple[subprocess.Popen, object | None]:
     process = subprocess.Popen(
         command,
         cwd=ROOT,
-        stdin=subprocess.DEVNULL,
+        # AMPS/atlas-run treats EOF on stdin as a graceful shutdown request.
+        # Keep the pipe open while the system-test driver configures Bamboo.
+        stdin=subprocess.PIPE,
         stdout=log_file,
         stderr=subprocess.STDOUT,
         text=True,
