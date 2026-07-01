@@ -62,3 +62,62 @@ jobs:
           name: bamboo-systemtest-artifacts
           path: systemtest/artifacts/**
           if-no-files-found: ignore
+
+  bamboo-system-tests-linux:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+
+    env:
+      BAMBOO_URL: http://localhost:6990/bamboo
+      BAMBOO_USERNAME: admin
+      BAMBOO_PASSWORD: admin
+      CI_TEARDOWN_BAMBOO: true
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: corretto
+          java-version: 21
+          cache: maven
+
+      - name: Restore Maven repository cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: linux-maven-bamboo-${{ hashFiles('pom.xml', 'systemtest/maven-settings.xml', 'systemtest/specs/pom.xml') }}
+          restore-keys: |
+            linux-maven-bamboo-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.x"
+
+      - name: Install Python dependencies
+        run: python -m pip install -r systemtest/requirements.txt
+
+      - name: Set up MATLAB
+        uses: matlab-actions/setup-matlab@v3
+        with:
+          release: R2026a
+
+      - name: Run Bamboo system tests
+        run: python -u systemtest/run_system_tests.py
+
+      - name: Save Maven repository cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.m2/repository
+          key: linux-maven-bamboo-${{ github.run_id }}
+
+      - name: Upload system-test artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bamboo-systemtest-artifacts-linux
+          path: systemtest/artifacts/**
+          if-no-files-found: ignore
