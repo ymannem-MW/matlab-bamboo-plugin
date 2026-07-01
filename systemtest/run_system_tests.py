@@ -18,6 +18,7 @@ import configure_project
 import probe_bamboo
 import run_builds
 import start_bamboo
+import systemtest_logging as log
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,10 +30,7 @@ BAMBOO_PORT = os.environ.get("BAMBOO_PORT", "6990")
 LAUNCHER_FILE = ARTIFACTS / "start-bamboo.cmd"
 
 
-LOG_MILESTONES = (
-    re.compile(r"--- .* @ matlab-bamboo-plugin ---"),
-    re.compile(r"Downloading from "),
-    re.compile(r"Downloaded from "),
+BAMBOO_STARTUP_MILESTONES = (
     re.compile(r"Building jar:"),
     re.compile(r"Starting bamboo"),
     re.compile(r"Deploying web application archive"),
@@ -44,26 +42,16 @@ LOG_MILESTONES = (
     re.compile(r"bamboo started successfully"),
     re.compile(r"BUILD SUCCESS"),
     re.compile(r"BUILD FAILURE"),
-    re.compile(r"ERROR"),
+    re.compile(r"\[ERROR\]"),
 )
 
 
-def print_phase(message: str) -> None:
-    print("")
-    print("=" * 60)
-    print(message)
-    print("=" * 60)
+def print_phase_header(message: str) -> None:
+    log.section(message)
 
 
 def print_log_tail(line_count: int = 80) -> None:
-    if not LOG_FILE.is_file():
-        print("No Bamboo/AMPS log file is available yet.")
-        return
-
-    lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()
-    print(f"Last {min(line_count, len(lines))} lines from {LOG_FILE}:")
-    for line in lines[-line_count:]:
-        print(line)
+    log.print_file_tail(LOG_FILE, line_count)
 
 
 def powershell_quote(value: str | Path) -> str:
@@ -72,26 +60,26 @@ def powershell_quote(value: str | Path) -> str:
 
 def rotate_target_directory() -> None:
     if not TARGET_DIR.exists():
-        print("  No existing target directory found.")
+        log.info("No existing target directory found.")
         return
 
     stale = ROOT / f"target-stale-{time.strftime('%Y%m%d-%H%M%S')}"
     for attempt in range(1, 7):
-        print(f"  Moving existing target directory to {stale.name} (attempt {attempt}/6)")
+        log.info(f"Moving existing target directory to {stale.name} (attempt {attempt}/6)")
         try:
             TARGET_DIR.rename(stale)
-            print("  Existing target directory moved out of the way.")
+            log.success("Existing target directory moved out of the way.")
             return
         except OSError as exc:
-            print(f"  Rename failed: {exc}")
+            log.warning(f"Rename failed: {exc}")
             if attempt < 6:
-                print("  Waiting for Bamboo/Windows file locks to release...")
+                log.info("Waiting for Bamboo/Windows file locks to release.")
                 time.sleep(5)
 
-    print("  Trying to remove target directory directly...")
+    log.info("Trying to remove target directory directly.")
     try:
         shutil.rmtree(TARGET_DIR)
-        print("  Existing target directory removed.")
+        log.success("Existing target directory removed.")
     except OSError as exc:
         raise RuntimeError(
             "Could not move or remove target. A Windows/OneDrive file lock is "
@@ -100,7 +88,7 @@ def rotate_target_directory() -> None:
 
 
 def stop_process_tree(pid: int) -> None:
-    print(f"  Stopping existing process tree pid={pid}")
+    log.info(f"Stopping existing process tree pid={pid}")
     if sys.platform.startswith("win"):
         subprocess.run(["taskkill", "/PID", str(pid), "/T", "/F"], check=False)
         return
@@ -122,12 +110,12 @@ def stop_process_tree(pid: int) -> None:
 
 def stop_pid_file_process() -> None:
     if not PID_FILE.is_file():
-        print("  No Bamboo pid file found.")
+        log.info("No Bamboo pid file found.")
         return
 
     pid_text = PID_FILE.read_text(encoding="utf-8").strip()
     if not pid_text:
-        print("  Bamboo pid file is empty.")
+        log.warning("Bamboo pid file is empty.")
         PID_FILE.unlink(missing_ok=True)
         return
 
@@ -162,7 +150,7 @@ def stop_process_on_port() -> None:
         ]
 
     if not pids:
-        print(f"  No process is listening on port {port}.")
+        log.info(f"No process is listening on port {port}.")
         return
 
     for pid in pids:
@@ -170,7 +158,7 @@ def stop_process_on_port() -> None:
 
 
 def teardown_existing_bamboo() -> None:
-    print("Closing any existing Bamboo process before starting a new run...")
+    log.step("Closing any existing Bamboo process before starting a new run")
     stop_pid_file_process()
     stop_process_on_port()
     stop_bamboo_related_processes()
@@ -217,7 +205,7 @@ Get-CimInstance Win32_Process |
         print(output)
     if result.returncode != 0:
         error = (result.stderr or "").strip()
-        print(f"  Bamboo-related process scan skipped/failed: {error or result.returncode}")
+        log.warning(f"Bamboo-related process scan skipped/failed: {error or result.returncode}")
 
 
 def cmd_quote(value: Path | str) -> str:
@@ -310,13 +298,13 @@ def stop_launched_bamboo(process: subprocess.Popen) -> None:
             process.wait(timeout=60)
             return
         except subprocess.TimeoutExpired:
-            print("  Bamboo process did not exit after stdin close; stopping process tree.")
+            log.warning("Bamboo process did not exit after stdin close; stopping process tree.")
 
     stop_process_tree(process.pid)
     try:
         process.wait(timeout=60)
     except subprocess.TimeoutExpired:
-        print("  Bamboo process did not exit after taskkill; forcing one more termination.")
+        log.warning("Bamboo process did not exit after taskkill; forcing one more termination.")
         process.kill()
         process.wait(timeout=30)
 
@@ -329,21 +317,21 @@ def stream_bamboo_progress(stop_event: threading.Event, process: subprocess.Pope
 
     while not stop_event.is_set():
         if LOG_FILE.exists():
-            with LOG_FILE.open("r", encoding="utf-8", errors="replace") as log:
-                log.seek(position)
-                for line in log:
+            with LOG_FILE.open("r", encoding="utf-8", errors="replace") as log_file:
+                log_file.seek(position)
+                for line in log_file:
                     text = line.strip()
-                    if any(pattern.search(text) for pattern in LOG_MILESTONES):
+                    if any(pattern.search(text) for pattern in BAMBOO_STARTUP_MILESTONES):
                         last_milestone = text
-                        print(f"[bamboo] {text}")
-                position = log.tell()
+                        log.info(f"Bamboo milestone: {text}")
+                position = log_file.tell()
 
         now = time.time()
         if now - last_progress >= 30:
             elapsed = int(now - started)
             state = "running" if process.poll() is None else f"exited rc={process.returncode}"
-            print(
-                f"[progress] Bamboo startup elapsed={elapsed}s; "
+            log.info(
+                f"Bamboo startup elapsed={elapsed}s; "
                 f"process={state}; last={last_milestone}"
             )
             last_progress = now
@@ -361,15 +349,15 @@ def main() -> int:
     teardown_at_end = should_teardown_bamboo()
     configure_ci_timeouts()
 
-    print_phase("PHASE 0: Teardown Existing Bamboo")
+    print_phase_header("PHASE 0: Teardown Existing Bamboo")
     teardown_existing_bamboo()
 
-    print_phase("PHASE 1: Prepare Workspace")
+    print_phase_header("PHASE 1: Prepare Workspace")
     rotate_target_directory()
 
-    print_phase("PHASE 2: Start Bamboo")
-    print("  " + " ".join(command))
-    print(f"  log={LOG_FILE}")
+    print_phase_header("PHASE 2: Start Bamboo")
+    log.command(command)
+    log.artifact(LOG_FILE)
 
     log_file_handle = None
     process, log_file_handle = launch_bamboo(command)
@@ -385,43 +373,45 @@ def main() -> int:
         progress_thread.start()
 
         try:
-            print_phase("PHASE 3: Probe Bamboo Bootstrap")
+            print_phase_header("PHASE 3: Probe Bamboo Bootstrap")
             probe_bamboo.SERVER_PROCESS = process
             bootstrap_result = probe_bamboo.main()
             if bootstrap_result != 0:
                 return bootstrap_result
+            stop_progress.set()
+            progress_thread.join(timeout=5)
 
-            print_phase("PHASE 4: Configure Bamboo Project And Agent")
+            print_phase_header("PHASE 4: Configure Bamboo Project And Agent")
             configure_result = configure_project.main()
             if configure_result != 0:
                 return configure_result
 
-            print_phase("PHASE 5: Run MATLAB Bamboo Plans")
+            print_phase_header("PHASE 5: Run MATLAB Bamboo Plans")
             return run_builds.main()
         except Exception as exc:
             print("")
-            print(f"ERROR: {exc}")
+            log.error(str(exc))
             if process.poll() is not None:
-                print(f"Bamboo/AMPS process already exited with code {process.returncode}.")
+                log.error(f"Bamboo/AMPS process already exited with code {process.returncode}.")
             print_log_tail()
             return 1
         finally:
             stop_progress.set()
             progress_thread.join(timeout=5)
             elapsed = int(time.time() - started)
-            print_phase("PHASE 6: Final Bamboo State")
-            print(f"System-test driver completed after {elapsed}s.")
+            print_phase_header("PHASE 6: Final Bamboo State")
+            log.info(f"System-test driver completed after {elapsed}s.")
             if process.poll() is None:
                 if teardown_at_end:
-                    print("CI teardown requested; stopping Bamboo before exit.")
+                    log.info("CI teardown requested; stopping Bamboo before exit.")
                     stop_launched_bamboo(process)
                     PID_FILE.unlink(missing_ok=True)
                 else:
-                    print(f"Bamboo is still running at: {probe_bamboo.BAMBOO_URL}")
-                    print("The next run will close this server before starting a fresh one.")
+                    log.success(f"Bamboo is still running at: {probe_bamboo.BAMBOO_URL}")
+                    log.info("The next run will close this server before starting a fresh one.")
             else:
-                print(f"Bamboo is not running. Process exited with code {process.returncode}.")
-            print(f"System-test artifacts are in: {ARTIFACTS}")
+                log.warning(f"Bamboo is not running. Process exited with code {process.returncode}.")
+            log.artifact(ARTIFACTS)
     finally:
         if log_file_handle is not None:
             log_file_handle.close()

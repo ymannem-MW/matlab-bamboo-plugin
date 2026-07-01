@@ -19,6 +19,7 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
+import systemtest_logging as log
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -31,7 +32,14 @@ POLL_INTERVAL = int(os.environ.get("BAMBOO_POLL_INTERVAL", "10"))
 SERVER_PROCESS: subprocess.Popen | None = None
 
 
-def save_response(name: str, response: requests.Response) -> None:
+def summarize_exception(exc: Exception, max_length: int = 180) -> str:
+    message = str(exc).replace("\n", " ")
+    if len(message) <= max_length:
+        return message
+    return message[: max_length - 3] + "..."
+
+
+def save_response(name: str, response: requests.Response, announce: bool = True) -> None:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     safe_name = re.sub(r"[^A-Za-z0-9_.-]+", "_", name)
     path = ARTIFACTS / safe_name
@@ -48,12 +56,12 @@ def save_response(name: str, response: requests.Response) -> None:
         encoding="utf-8",
         errors="replace",
     )
-    print(f"  Saved response: {path}")
+    if announce:
+        log.artifact(path)
 
 
-def wait_for_http() -> requests.Response:
-    print(f"Waiting up to {SERVER_TIMEOUT}s for Bamboo HTTP at {BAMBOO_URL}...")
-    deadline = time.time() + SERVER_TIMEOUT
+def wait_for_http(deadline: float) -> requests.Response:
+    log.step(f"Waiting up to {SERVER_TIMEOUT}s for Bamboo HTTP at {BAMBOO_URL}")
     start = time.time()
     last_progress = start
     last_error = None
@@ -66,14 +74,14 @@ def wait_for_http() -> requests.Response:
         try:
             response = requests.get(BAMBOO_URL, timeout=10, allow_redirects=False)
             elapsed = int(time.time() - start)
-            print(f"  Bamboo responded: HTTP {response.status_code} after {elapsed}s")
+            log.success(f"Bamboo responded: HTTP {response.status_code} after {elapsed}s")
             return response
         except requests.RequestException as exc:
             last_error = exc
             now = time.time()
             if now - last_progress >= 30:
                 elapsed = int(now - start)
-                print(f"  Still waiting for Bamboo HTTP ({elapsed}s elapsed): {exc}")
+                log.info(f"Still waiting for Bamboo HTTP ({elapsed}s elapsed): {summarize_exception(exc)}")
                 last_progress = now
             time.sleep(POLL_INTERVAL)
     raise TimeoutError(f"Bamboo did not respond within {SERVER_TIMEOUT}s: {last_error}")
@@ -98,27 +106,54 @@ def get_rest_server(session: requests.Session) -> requests.Response:
     )
 
 
-def check_api_ready() -> bool:
-    print("Checking Bamboo REST API readiness...")
+def wait_for_api_ready(deadline: float) -> bool:
+    log.step("Checking Bamboo REST API readiness")
     session = requests.Session()
     session.auth = (BAMBOO_USERNAME, BAMBOO_PASSWORD)
-    print(f"  Authenticating as '{BAMBOO_USERNAME}'")
-    response = get_rest_server(session)
-    print(f"  REST /server returned HTTP {response.status_code}")
-    save_response("rest-server.txt", response)
+    log.info(f"Authenticating as '{BAMBOO_USERNAME}'")
 
-    if response.status_code == 200:
-        print("  REST API is ready with configured credentials.")
-        return True
+    last_progress = time.time()
+    last_status = "<not checked>"
+    last_error = None
+    while time.time() < deadline:
+        if SERVER_PROCESS is not None and SERVER_PROCESS.poll() is not None:
+            raise RuntimeError(
+                f"Bamboo process exited before REST became ready "
+                f"(exit code {SERVER_PROCESS.returncode})."
+            )
 
-    if response.status_code in (401, 403):
-        print("  REST API is reachable, but admin credentials are not accepted yet.")
-        return False
+        try:
+            response = get_rest_server(session)
+            last_status = f"HTTP {response.status_code}"
+            save_response("rest-server.txt", response, announce=response.status_code == 200)
 
-    if response.status_code in (302, 303):
-        print(f"  REST API redirected to: {response.headers.get('Location', '')}")
-        return False
+            if response.status_code == 200:
+                log.info(f"REST /server returned HTTP {response.status_code}")
+                log.success("REST API is ready with configured credentials.")
+                return True
 
+            now = time.time()
+            if now - last_progress >= 30:
+                if response.status_code in (401, 403):
+                    log.info("REST API is reachable, but admin credentials are not accepted yet.")
+                elif response.status_code in (302, 303):
+                    log.info(f"REST API redirected to: {response.headers.get('Location', '')}")
+                else:
+                    log.info(f"REST /server returned HTTP {response.status_code}; still waiting.")
+                last_progress = now
+        except requests.RequestException as exc:
+            last_error = exc
+            now = time.time()
+            if now - last_progress >= 30:
+                log.info(f"Still waiting for Bamboo REST API: {summarize_exception(exc)}")
+                last_progress = now
+
+        time.sleep(POLL_INTERVAL)
+
+    if last_error is not None:
+        log.warning(f"Bamboo REST API did not become ready: {summarize_exception(last_error)}")
+    else:
+        log.warning(f"Bamboo REST API did not become ready; last status was {last_status}.")
     return False
 
 
@@ -126,12 +161,12 @@ def inspect_landing_page(initial_response: requests.Response) -> None:
     response = initial_response
     if response.status_code in (301, 302, 303, 307, 308):
         location = response.headers.get("Location", "")
-        print(f"  Landing page redirected to: {location}")
+        log.info(f"Landing page redirected to: {location}")
         next_url = urljoin(BAMBOO_URL + "/", location)
         try:
             response = requests.get(next_url, timeout=20, allow_redirects=False)
         except requests.RequestException as exc:
-            print(f"  Landing page capture skipped: {exc}")
+            log.warning(f"Landing page capture skipped: {exc}")
             return
 
     save_response("landing-page.html", response)
@@ -154,30 +189,30 @@ def inspect_landing_page(initial_response: requests.Response) -> None:
         "evaluation_license": "evaluation license" in text,
         "login_link": "userlogin.action" in text,
     }
-    print("  Landing page signals:")
+    log.info("Landing page signals:")
     for key, value in signals.items():
-        print(f"    {key}: {value}")
+        log.detail(f"{key}: {value}")
 
 
 def main() -> int:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
 
     matlab_path = detect_matlab_path()
-    print(f"BAMBOO_URL = {BAMBOO_URL}")
-    print(f"MATLAB_PATH = {matlab_path or '<not found>'}")
+    log.info(f"BAMBOO_URL = {BAMBOO_URL}")
+    log.info(f"MATLAB_PATH = {matlab_path or '<not found>'}")
 
-    response = wait_for_http()
+    startup_deadline = time.time() + SERVER_TIMEOUT
+
+    response = wait_for_http(startup_deadline)
     inspect_landing_page(response)
 
-    if check_api_ready():
-        print("Bamboo bootstrap probe passed: API is available.")
+    if wait_for_api_ready(startup_deadline):
+        log.success("Bamboo bootstrap probe passed: API is available.")
         return 0
 
     print("")
-    print("Bamboo bootstrap is not complete.")
-    print("This is the expected feasibility checkpoint for a fresh Bamboo server.")
-    print("Review systemtest/artifacts/landing-page.html and rest-server.txt to")
-    print("identify the setup/license endpoints that must be automated next.")
+    log.error("Bamboo bootstrap is not complete.")
+    log.info("Review landing-page.html and rest-server.txt to identify the setup/license blocker.")
     return 2
 
 

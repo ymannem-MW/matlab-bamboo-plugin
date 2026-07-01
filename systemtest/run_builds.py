@@ -13,6 +13,7 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
+import systemtest_logging as log
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -46,11 +47,12 @@ def safe_name(value: str) -> str:
     return re.sub(r"[^A-Za-z0-9_.-]+", "_", value)
 
 
-def save_text(name: str, text: str) -> Path:
+def write_text_artifact(name: str, text: str, announce: bool = True) -> Path:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
     path = ARTIFACTS / safe_name(name)
     path.write_text(text, encoding="utf-8", errors="replace")
-    print(f"  Saved artifact: {path}")
+    if announce:
+        log.artifact(path)
     return path
 
 
@@ -63,25 +65,26 @@ def make_session() -> requests.Session:
         raise RuntimeError(
             f"Bamboo authentication/readiness failed: HTTP {response.status_code}: {response.text[:300]}"
         )
+    log.success("Bamboo REST authentication verified.")
     return session
 
 
 def trigger_plan(session: requests.Session, plan_key: str) -> str:
-    print(f"  Queueing plan {plan_key}...")
+    log.step(f"Queueing plan {plan_key}")
     response = session.post(
         urljoin(BAMBOO_URL + "/", f"rest/api/latest/queue/{plan_key}"),
         headers={"Accept": "application/json"},
         timeout=30,
     )
-    print(f"  Queue {plan_key}: HTTP {response.status_code}")
-    save_text(f"queue-{plan_key}.json", response.text)
+    log.info(f"Queue {plan_key}: HTTP {response.status_code}")
+    write_text_artifact(f"queue-{plan_key}.json", response.text)
     if response.status_code not in (200, 201):
         raise RuntimeError(f"Failed to queue {plan_key}: {response.text[:500]}")
     data = response.json()
     result_key = data.get("buildResultKey") or data.get("planResultKey", {}).get("key")
-    print(f"  Queued result key: {result_key}")
+    log.info(f"Queued result key: {result_key}")
     if result_key:
-        print(f"  Result URL: {BAMBOO_URL}/browse/{result_key}")
+        log.detail(f"Result URL: {BAMBOO_URL}/browse/{result_key}")
     return result_key
 
 
@@ -91,7 +94,7 @@ def get_result(session: requests.Session, result_key: str) -> dict:
         params={"expand": "stages.stage.results.result,artifacts"},
         timeout=30,
     )
-    save_text(f"result-{result_key}.json", response.text)
+    write_text_artifact(f"result-{result_key}.json", response.text, announce=False)
     if response.status_code != 200:
         raise RuntimeError(f"Could not read result {result_key}: {response.status_code}: {response.text[:500]}")
     return response.json()
@@ -105,7 +108,7 @@ def wait_for_result(session: requests.Session, result_key: str) -> dict:
         state = data.get("buildState") or data.get("lifeCycleState") or "Unknown"
         finished = data.get("buildCompleted") or state in ("Successful", "Failed", "Error")
         elapsed = int(time.time() - start)
-        print(f"  {result_key}: state={state}, completed={finished}, elapsed={elapsed}s")
+        log.info(f"{result_key}: state={state}, completed={finished}, elapsed={elapsed}s")
         if finished:
             return data
         time.sleep(POLL_INTERVAL)
@@ -113,7 +116,7 @@ def wait_for_result(session: requests.Session, result_key: str) -> dict:
 
 
 def download_log(session: requests.Session, result_key: str) -> str:
-    print(f"  Downloading build log for {result_key}...")
+    log.step(f"Downloading build log for {result_key}")
     candidates = [
         f"download/{result_key}/build_logs/{result_key}.log",
         f"browse/{result_key}/log",
@@ -121,11 +124,11 @@ def download_log(session: requests.Session, result_key: str) -> str:
     ]
     for candidate in candidates:
         response = session.get(urljoin(BAMBOO_URL + "/", candidate), timeout=60)
-        print(f"    {candidate}: HTTP {response.status_code}")
+        log.detail(f"{candidate}: HTTP {response.status_code}")
         if response.status_code == 200 and response.text.strip():
-            save_text(f"log-{result_key}.txt", response.text)
+            write_text_artifact(f"log-{result_key}.txt", response.text)
             return response.text
-    save_text(f"log-{result_key}.txt", "<log download unavailable>")
+    write_text_artifact(f"log-{result_key}.txt", "<log download unavailable>")
     return ""
 
 
@@ -146,11 +149,11 @@ def find_job_result_keys(result: dict) -> list[str]:
 
 
 def download_junit(session: requests.Session, result: dict, relative_path: str) -> bytes | None:
-    print(f"  Downloading JUnit artifact: {relative_path}")
+    log.step(f"Downloading JUnit artifact: {relative_path}")
     artifacts = result.get("artifacts", {}).get("artifact", [])
     if isinstance(artifacts, dict):
         artifacts = [artifacts]
-    print(f"  Bamboo reported {len(artifacts)} artifact link(s).")
+    log.info(f"Bamboo reported {len(artifacts)} artifact link(s).")
     for artifact in artifacts:
         link = artifact.get("link", {}).get("href")
         if not link:
@@ -158,12 +161,12 @@ def download_junit(session: requests.Session, result: dict, relative_path: str) 
         parsed = urlparse(link)
         artifact_url = urljoin(BAMBOO_URL + "/", parsed.path.lstrip("/"))
         response = session.get(artifact_url, timeout=60)
-        print(f"    artifact link {artifact_url}: HTTP {response.status_code}")
+        log.detail(f"artifact link {artifact_url}: HTTP {response.status_code}")
         if response.status_code == 200 and response.content:
             path = ARTIFACTS / "junit.xml"
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(response.content)
-            print(f"  Saved artifact: {path}")
+            log.artifact(path)
             return response.content
 
     result_keys = [result.get("key")] + find_job_result_keys(result)
@@ -176,12 +179,12 @@ def download_junit(session: requests.Session, result: dict, relative_path: str) 
         ]
         for candidate in candidates:
             response = session.get(urljoin(BAMBOO_URL + "/", candidate), timeout=60)
-            print(f"    fallback {candidate}: HTTP {response.status_code}")
+            log.detail(f"fallback {candidate}: HTTP {response.status_code}")
             if response.status_code == 200 and response.content:
                 path = ARTIFACTS / "junit.xml"
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(response.content)
-                print(f"  Saved artifact: {path}")
+                log.artifact(path)
                 return response.content
     return None
 
@@ -194,10 +197,7 @@ def validate_junit(content: bytes) -> str:
 
 
 def run_and_validate(session: requests.Session, plan: dict) -> bool:
-    print("")
-    print("=" * 60)
-    print(f"PLAN: {plan['name']} ({plan['key']})")
-    print("=" * 60)
+    log.section(f"PLAN: {plan['name']} ({plan['key']})")
 
     result_key = trigger_plan(session, plan["key"])
     if not result_key:
@@ -205,44 +205,42 @@ def run_and_validate(session: requests.Session, plan: dict) -> bool:
 
     result = wait_for_result(session, result_key)
     state = result.get("buildState")
-    print(f"  Final buildState={state}")
-    log = download_log(session, result_key)
+    log.info(f"Final buildState={state}")
+    build_log = download_log(session, result_key)
 
     if state != "Successful":
-        print(f"  FAIL: buildState={state}")
-        if log:
-            print(f"  Build log (last 500 chars):\n{log[-500:]}")
+        log.error(f"buildState={state}")
+        if build_log:
+            print(f"Build log tail:\n{build_log[-500:]}")
         return False
 
     expected_log = plan.get("expected_log")
-    if expected_log and expected_log not in log:
-        print(f"  FAIL: log does not contain {expected_log!r}")
-        if log:
-            print(f"  Build log (last 500 chars):\n{log[-500:]}")
+    if expected_log and expected_log not in build_log:
+        log.error(f"log does not contain {expected_log!r}")
+        if build_log:
+            print(f"Build log tail:\n{build_log[-500:]}")
         return False
     if expected_log:
-        print(f"  PASS: log contains {expected_log!r}")
+        log.success(f"log contains {expected_log!r}")
 
     junit_artifact = plan.get("junit_artifact")
     if junit_artifact:
         content = download_junit(session, result, junit_artifact)
         if content is None:
-            print(f"  FAIL: could not download {junit_artifact}")
+            log.error(f"could not download {junit_artifact}")
             return False
-        print(f"  PASS: {validate_junit(content)}")
+        log.success(validate_junit(content))
     else:
-        print("  PASS")
+        log.success("Plan validation passed.")
 
     return True
 
 
 def main() -> int:
     ARTIFACTS.mkdir(parents=True, exist_ok=True)
-    print("=" * 60)
-    print("SYSTEM TEST: End-to-End Bamboo Plan Validation")
-    print("=" * 60)
-    print(f"BAMBOO_URL = {BAMBOO_URL}")
-    print(f"Artifacts  = {ARTIFACTS}")
+    log.section("SYSTEM TEST: End-to-End Bamboo Plan Validation")
+    log.info(f"BAMBOO_URL = {BAMBOO_URL}")
+    log.artifact(ARTIFACTS)
     session = make_session()
     results: dict[str, str] = {}
 
@@ -250,17 +248,14 @@ def main() -> int:
         try:
             passed = run_and_validate(session, plan)
         except Exception as exc:
-            print(f"  ERROR: {exc}")
+            log.error(str(exc))
             passed = False
         results[plan["name"]] = "PASS" if passed else "FAIL"
 
-    print("")
-    print("=" * 60)
-    print("RESULTS SUMMARY")
-    print("=" * 60)
+    log.section("RESULTS SUMMARY")
     for name, result in results.items():
-        print(f"  [{result}] {name}")
-    print(f"\nArtifacts saved under: {ARTIFACTS}")
+        log.detail(f"[{result}] {name}")
+    log.artifact(ARTIFACTS)
 
     return 0 if all(result == "PASS" for result in results.values()) else 1
 

@@ -9,20 +9,31 @@ configuration.
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
 import requests
+import systemtest_logging as log
 
 
 ROOT = Path(__file__).resolve().parents[1]
 SPECS_DIR = ROOT / "systemtest" / "specs"
+ARTIFACTS = ROOT / "systemtest" / "artifacts"
+SPECS_PUBLISH_LOG = ARTIFACTS / "specs-publish.log"
 BAMBOO_URL = os.environ.get("BAMBOO_URL", "http://localhost:6990/bamboo").rstrip("/")
 BAMBOO_USERNAME = os.environ.get("BAMBOO_USERNAME", "admin")
 BAMBOO_PASSWORD = os.environ.get("BAMBOO_PASSWORD", "admin")
 MATLAB_CAPABILITY = os.environ.get("MATLAB_BAMBOO_CAPABILITY", "MATLAB R2026a")
+SPECS_SUMMARY_PATTERNS = (
+    re.compile(r"\[BambooServer\]"),
+    re.compile(r"BUILD (SUCCESS|FAILURE)"),
+    re.compile(r"\[ERROR\]"),
+    re.compile(r"Total time:"),
+    re.compile(r"Finished at:"),
+)
 
 
 def find_maven() -> str:
@@ -60,14 +71,14 @@ def detect_matlab_path() -> str:
 
 
 def make_session() -> requests.Session:
-    print(f"Connecting to Bamboo REST API at {BAMBOO_URL}...")
+    log.step(f"Connecting to Bamboo REST API at {BAMBOO_URL}")
     session = requests.Session()
     session.auth = (BAMBOO_USERNAME, BAMBOO_PASSWORD)
     session.headers.update({"Accept": "application/json"})
     response = session.get(f"{BAMBOO_URL}/rest/api/latest/server", timeout=30)
-    print(f"  REST /server returned HTTP {response.status_code}")
+    log.info(f"REST /server returned HTTP {response.status_code}")
     response.raise_for_status()
-    print(f"  Authenticated as '{BAMBOO_USERNAME}'.")
+    log.success(f"Authenticated as '{BAMBOO_USERNAME}'.")
     return session
 
 
@@ -75,11 +86,12 @@ def configure_matlab_capability() -> None:
     session = make_session()
     matlab_path = detect_matlab_path()
     capability_key = f"system.builder.matlab.{MATLAB_CAPABILITY}"
-    print(f"Configuring Bamboo agent capability: {capability_key} = {matlab_path}")
+    log.step("Configuring Bamboo agent capability")
+    log.detail(f"{capability_key} = {matlab_path}")
 
-    print("  Reading available Bamboo agents...")
+    log.info("Reading available Bamboo agents.")
     response = session.get(f"{BAMBOO_URL}/rest/api/latest/agent", timeout=30)
-    print(f"  Agent list returned HTTP {response.status_code}")
+    log.info(f"Agent list returned HTTP {response.status_code}")
     response.raise_for_status()
     agents = response.json()
     if not agents:
@@ -87,19 +99,19 @@ def configure_matlab_capability() -> None:
 
     agent_id = agents[0]["id"]
     agent_name = agents[0].get("name", "<unknown>")
-    print(f"  Using agent id={agent_id}, name={agent_name}")
+    log.info(f"Using agent id={agent_id}, name={agent_name}")
     response = session.post(
         f"{BAMBOO_URL}/rest/api/latest/agent/{agent_id}/capability",
         json={"key": capability_key, "value": matlab_path},
         timeout=30,
     )
-    print(f"  Capability update returned HTTP {response.status_code}")
+    log.info(f"Capability update returned HTTP {response.status_code}")
     if response.status_code not in (200, 201, 204):
         raise RuntimeError(
             f"Failed to configure capability on agent {agent_id}: "
             f"HTTP {response.status_code}: {response.text[:300]}"
         )
-    print("  Agent capability configured.")
+    log.success("Agent capability configured.")
 
 
 def main() -> int:
@@ -118,11 +130,32 @@ def main() -> int:
         "-Dexec.cleanupDaemonThreads=false",
     ]
 
-    print("Publishing Bamboo system-test specs:")
-    print("  " + " ".join(command))
-    result = subprocess.call(command, cwd=SPECS_DIR)
-    print(f"  Specs publish exited with code {result}")
-    return result
+    log.step("Publishing Bamboo system-test specs")
+    log.command(command)
+    result = subprocess.run(
+        command,
+        cwd=SPECS_DIR,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    output = (result.stdout or "") + (result.stderr or "")
+    log.write_text_artifact(SPECS_PUBLISH_LOG, output)
+
+    summary = log.summarize_lines(output, SPECS_SUMMARY_PATTERNS)
+    if summary:
+        log.info("Specs publish summary:")
+        for line in summary:
+            log.detail(line)
+    else:
+        log.warning("Specs publish produced no recognized summary lines.")
+
+    if result.returncode == 0:
+        log.success("Specs publish completed.")
+    else:
+        log.error(f"Specs publish failed with exit code {result.returncode}.")
+        log.print_file_tail(SPECS_PUBLISH_LOG, 80)
+    return result.returncode
 
 
 if __name__ == "__main__":
