@@ -24,6 +24,14 @@ jobs:
           java-version: 21
           cache: maven
 
+      - name: Restore Maven repository cache
+        uses: actions/cache/restore@v4
+        with:
+          path: ~/.m2/repository
+          key: windows-maven-bamboo-${{ hashFiles('pom.xml', 'systemtest/maven-settings.xml', 'systemtest/specs/pom.xml') }}
+          restore-keys: |
+            windows-maven-bamboo-
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -39,6 +47,13 @@ jobs:
 
       - name: Run Bamboo system tests
         run: python -u systemtest\run_system_tests.py
+
+      - name: Save Maven repository cache
+        if: always()
+        uses: actions/cache/save@v4
+        with:
+          path: ~/.m2/repository
+          key: windows-maven-bamboo-${{ github.run_id }}
 
       - name: Upload system-test artifacts
         if: always()
