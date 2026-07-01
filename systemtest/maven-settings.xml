@@ -7,13 +7,13 @@
       <id>atlassian-public</id>
       <repositories>
         <repository>
-          <id>sonatype-public-repository</id>
-          <url>https://oss.sonatype.org/content/groups/public</url>
+          <id>central</id>
+          <url>https://repo.maven.apache.org/maven2</url>
           <releases>
             <enabled>true</enabled>
           </releases>
           <snapshots>
-            <enabled>true</enabled>
+            <enabled>false</enabled>
           </snapshots>
         </repository>
         <repository>
@@ -23,7 +23,7 @@
             <enabled>true</enabled>
           </releases>
           <snapshots>
-            <enabled>true</enabled>
+            <enabled>false</enabled>
           </snapshots>
         </repository>
         <repository>
@@ -33,7 +33,17 @@
             <enabled>true</enabled>
           </releases>
           <snapshots>
+            <enabled>false</enabled>
+          </snapshots>
+        </repository>
+        <repository>
+          <id>sonatype-public-repository</id>
+          <url>https://oss.sonatype.org/content/groups/public</url>
+          <releases>
             <enabled>true</enabled>
+          </releases>
+          <snapshots>
+            <enabled>false</enabled>
           </snapshots>
         </repository>
         <repository>
@@ -49,13 +59,13 @@
       </repositories>
       <pluginRepositories>
         <pluginRepository>
-          <id>sonatype-public-repository</id>
-          <url>https://oss.sonatype.org/content/groups/public</url>
+          <id>central</id>
+          <url>https://repo.maven.apache.org/maven2</url>
           <releases>
             <enabled>true</enabled>
           </releases>
           <snapshots>
-            <enabled>true</enabled>
+            <enabled>false</enabled>
           </snapshots>
         </pluginRepository>
         <pluginRepository>
@@ -65,7 +75,7 @@
             <enabled>true</enabled>
           </releases>
           <snapshots>
-            <enabled>true</enabled>
+            <enabled>false</enabled>
           </snapshots>
         </pluginRepository>
         <pluginRepository>
@@ -75,7 +85,17 @@
             <enabled>true</enabled>
           </releases>
           <snapshots>
+            <enabled>false</enabled>
+          </snapshots>
+        </pluginRepository>
+        <pluginRepository>
+          <id>sonatype-public-repository</id>
+          <url>https://oss.sonatype.org/content/groups/public</url>
+          <releases>
             <enabled>true</enabled>
+          </releases>
+          <snapshots>
+            <enabled>false</enabled>
           </snapshots>
         </pluginRepository>
       </pluginRepositories>

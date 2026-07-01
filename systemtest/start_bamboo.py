@@ -39,6 +39,7 @@ def get_command() -> list[str]:
     atlas_run = shutil.which("atlas-run")
     http_port = os.environ.get("BAMBOO_PORT", "6990")
     context_path = os.environ.get("BAMBOO_CONTEXT_PATH", "/bamboo")
+    artifact_threads = os.environ.get("MAVEN_ARTIFACT_THREADS", "16")
 
     if atlas_run:
         return [
@@ -63,10 +64,12 @@ def get_command() -> list[str]:
         "-s",
         str(settings),
         "-B",
+        "-nsu",
         "bamboo:run",
         f"-Dhttp.port={http_port}",
         f"-Dcontext.path={context_path}",
         "-Damps.quick.reload=false",
+        f"-Dmaven.artifact.threads={artifact_threads}",
         "-Dmaven.test.skip=true",
     ]
 
