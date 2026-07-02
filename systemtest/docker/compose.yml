@@ -1,0 +1,31 @@
+services:
+  bamboo-systemtest:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: matlab-bamboo-systemtest:latest
+    working_dir: /workspace/matlab-bamboo-plugin/systemtest
+    command: ["bash", "docker/run-systemtest.sh"]
+    ports:
+      - "${BAMBOO_PORT:-6990}:6990"
+    environment:
+      BAMBOO_URL: "http://localhost:6990/bamboo"
+      BAMBOO_PORT: "6990"
+      BAMBOO_CONTEXT_PATH: "/bamboo"
+      BAMBOO_USERNAME: "${BAMBOO_USERNAME:-admin}"
+      BAMBOO_PASSWORD: "${BAMBOO_PASSWORD:-admin}"
+      BAMBOO_SERVER_TIMEOUT: "${BAMBOO_SERVER_TIMEOUT:-2400}"
+      BAMBOO_BUILD_TIMEOUT: "${BAMBOO_BUILD_TIMEOUT:-900}"
+      MATLAB_BAMBOO_CAPABILITY: "${MATLAB_BAMBOO_CAPABILITY:-MATLAB R2026a}"
+      MATLAB_PATH: "${MATLAB_PATH:-/opt/matlab/R2026a}"
+      REAL_MATLAB_ROOT: "${REAL_MATLAB_ROOT:-/opt/matlab/R2026a}"
+      MLM_LICENSE_TOKEN: "${MLM_LICENSE_TOKEN:-}"
+      MLM_LICENSE_FILE: "${MLM_LICENSE_FILE:-}"
+      MW_LICENSE_FILE: "${MW_LICENSE_FILE:-}"
+      MATHWORKS_LICENSE_FILE: "${MATHWORKS_LICENSE_FILE:-}"
+    volumes:
+      - ../..:/workspace/matlab-bamboo-plugin
+      - maven-cache:/root/.m2
+
+volumes:
+  maven-cache:

@@ -16,12 +16,11 @@ import sys
 from pathlib import Path
 
 import requests
+from systemtest_common import ARTIFACTS, ROOT, find_maven
 import systemtest_logging as log
 
 
-ROOT = Path(__file__).resolve().parents[1]
 SPECS_DIR = ROOT / "systemtest" / "specs"
-ARTIFACTS = ROOT / "systemtest" / "artifacts"
 SPECS_PUBLISH_LOG = ARTIFACTS / "specs-publish.log"
 BAMBOO_URL = os.environ.get("BAMBOO_URL", "http://localhost:6990/bamboo").rstrip("/")
 BAMBOO_USERNAME = os.environ.get("BAMBOO_USERNAME", "admin")
@@ -34,24 +33,6 @@ SPECS_SUMMARY_PATTERNS = (
     re.compile(r"Total time:"),
     re.compile(r"Finished at:"),
 )
-
-
-def find_maven() -> str:
-    configured = os.environ.get("MAVEN_CMD")
-    if configured:
-        return configured
-
-    local_maven = ROOT.parent / ".tools" / "maven" / "bin" / (
-        "mvn.cmd" if os.name == "nt" else "mvn"
-    )
-    if local_maven.is_file():
-        return str(local_maven)
-
-    maven = shutil.which("mvn")
-    if maven:
-        return maven
-
-    raise RuntimeError("Could not find Maven. Set MAVEN_CMD or install mvn.")
 
 
 def detect_matlab_path() -> str:

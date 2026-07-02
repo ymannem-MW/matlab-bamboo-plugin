@@ -1,0 +1,12 @@
+services:
+  bamboo-systemtest:
+    build:
+      args:
+        INSTALL_MATLAB: "true"
+        MATLAB_RELEASE: "${MATLAB_RELEASE:-R2026a}"
+        MATLAB_PRODUCTS: "${MATLAB_PRODUCTS:-MATLAB}"
+        MATLAB_INSTALL_ROOT: "${MATLAB_INSTALL_ROOT:-/opt/matlab}"
+        MATLAB_BATCH_ADAPTER_ROOT: "${MATLAB_BATCH_ADAPTER_ROOT:-/opt/matlab-batch-adapter}"
+    environment:
+      MATLAB_PATH: "${MATLAB_BATCH_ADAPTER_ROOT:-/opt/matlab-batch-adapter}"
+      REAL_MATLAB_ROOT: "${MATLAB_INSTALL_ROOT:-/opt/matlab}/${MATLAB_RELEASE:-R2026a}"

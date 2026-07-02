@@ -1,0 +1,6 @@
+services:
+  bamboo-systemtest:
+    environment:
+      MLM_LICENSE_FILE: "/licenses/license.dat"
+    volumes:
+      - "${MATLAB_LICENSE_FILE_HOST:?Set MATLAB_LICENSE_FILE_HOST to a MATLAB license.dat path}:/licenses/license.dat:ro"

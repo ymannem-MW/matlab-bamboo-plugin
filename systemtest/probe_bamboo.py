@@ -19,11 +19,10 @@ from pathlib import Path
 from urllib.parse import urljoin
 
 import requests
+from systemtest_common import ARTIFACTS
 import systemtest_logging as log
 
 
-ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "systemtest" / "artifacts"
 BAMBOO_URL = os.environ.get("BAMBOO_URL", "http://localhost:6990/bamboo").rstrip("/")
 BAMBOO_USERNAME = os.environ.get("BAMBOO_USERNAME", "admin")
 BAMBOO_PASSWORD = os.environ.get("BAMBOO_PASSWORD", "admin")

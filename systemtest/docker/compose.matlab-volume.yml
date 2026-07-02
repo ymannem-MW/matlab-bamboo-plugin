@@ -1,0 +1,7 @@
+services:
+  bamboo-systemtest:
+    volumes:
+      - type: bind
+        source: ${MATLAB_HOST_ROOT}
+        target: ${MATLAB_PATH:-/opt/matlab/R2026a}
+        read_only: true

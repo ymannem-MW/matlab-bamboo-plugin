@@ -13,11 +13,10 @@ from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import requests
+from systemtest_common import ARTIFACTS
 import systemtest_logging as log
 
 
-ROOT = Path(__file__).resolve().parents[1]
-ARTIFACTS = ROOT / "systemtest" / "artifacts"
 BAMBOO_URL = os.environ.get("BAMBOO_URL", "http://localhost:6990/bamboo").rstrip("/")
 BAMBOO_USERNAME = os.environ.get("BAMBOO_USERNAME", "admin")
 BAMBOO_PASSWORD = os.environ.get("BAMBOO_PASSWORD", "admin")
@@ -100,11 +99,45 @@ def get_result(session: requests.Session, result_key: str) -> dict:
     return response.json()
 
 
+def bamboo_relative_path(value: str) -> str:
+    parsed = urlparse(value)
+    path = parsed.path.lstrip("/") if parsed.path else value
+    context_path = urlparse(BAMBOO_URL).path.strip("/")
+    if context_path and path.startswith(context_path + "/"):
+        return path[len(context_path) + 1 :]
+    return path
+
+
+def iter_log_file_paths(value: object) -> list[str]:
+    paths: list[str] = []
+    if isinstance(value, dict):
+        log_files = value.get("logFiles", [])
+        if isinstance(log_files, str):
+            log_files = [log_files]
+        for log_file in log_files:
+            if isinstance(log_file, str) and log_file:
+                paths.append(bamboo_relative_path(log_file))
+        for child in value.values():
+            paths.extend(iter_log_file_paths(child))
+    elif isinstance(value, list):
+        for item in value:
+            paths.extend(iter_log_file_paths(item))
+    return paths
+
+
 def wait_for_result(session: requests.Session, result_key: str) -> dict:
     deadline = time.time() + BUILD_TIMEOUT
     start = time.time()
+    last_error = ""
     while time.time() < deadline:
-        data = get_result(session, result_key)
+        try:
+            data = get_result(session, result_key)
+        except RuntimeError as exc:
+            last_error = str(exc)
+            elapsed = int(time.time() - start)
+            log.warning(f"{result_key}: result not ready yet, elapsed={elapsed}s: {last_error[:300]}")
+            time.sleep(POLL_INTERVAL)
+            continue
         state = data.get("buildState") or data.get("lifeCycleState") or "Unknown"
         finished = data.get("buildCompleted") or state in ("Successful", "Failed", "Error")
         elapsed = int(time.time() - start)
@@ -112,20 +145,25 @@ def wait_for_result(session: requests.Session, result_key: str) -> dict:
         if finished:
             return data
         time.sleep(POLL_INTERVAL)
-    raise TimeoutError(f"Timed out waiting for {result_key}")
+    suffix = f"; last error: {last_error}" if last_error else ""
+    raise TimeoutError(f"Timed out waiting for {result_key}{suffix}")
 
 
-def download_log(session: requests.Session, result_key: str) -> str:
+def download_log(session: requests.Session, result_key: str, result: dict) -> str:
     log.step(f"Downloading build log for {result_key}")
-    candidates = [
+    candidates = iter_log_file_paths(result) + [
         f"download/{result_key}/build_logs/{result_key}.log",
         f"browse/{result_key}/log",
         f"downloadBuildLog.action?buildKey={result_key}",
     ]
+    seen: set[str] = set()
     for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
         response = session.get(urljoin(BAMBOO_URL + "/", candidate), timeout=60)
         log.detail(f"{candidate}: HTTP {response.status_code}")
-        if response.status_code == 200 and response.text.strip():
+        if response.status_code == 200 and response.text.strip() and "<!DOCTYPE html>" not in response.text[:100]:
             write_text_artifact(f"log-{result_key}.txt", response.text)
             return response.text
     write_text_artifact(f"log-{result_key}.txt", "<log download unavailable>")
@@ -158,8 +196,7 @@ def download_junit(session: requests.Session, result: dict, relative_path: str) 
         link = artifact.get("link", {}).get("href")
         if not link:
             continue
-        parsed = urlparse(link)
-        artifact_url = urljoin(BAMBOO_URL + "/", parsed.path.lstrip("/"))
+        artifact_url = urljoin(BAMBOO_URL + "/", bamboo_relative_path(link))
         response = session.get(artifact_url, timeout=60)
         log.detail(f"artifact link {artifact_url}: HTTP {response.status_code}")
         if response.status_code == 200 and response.content:
@@ -206,7 +243,7 @@ def run_and_validate(session: requests.Session, plan: dict) -> bool:
     result = wait_for_result(session, result_key)
     state = result.get("buildState")
     log.info(f"Final buildState={state}")
-    build_log = download_log(session, result_key)
+    build_log = download_log(session, result_key, result)
 
     if state != "Successful":
         log.error(f"buildState={state}")
